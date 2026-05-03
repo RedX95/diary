@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.pdb
+*.egg-info/
+.venv/
+venv/
+ENV/
+
+# Flet / build artifacts
+build/
+dist/
+.cache/
+
+# Android / Flutter
+*.apk
+*.aab
+*.keystore
+.android/
+.flutter-plugins
+.flutter-plugins-dependencies
+.dart_tool/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
