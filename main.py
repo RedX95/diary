@@ -1,9 +1,10 @@
+import os
 import flet as ft
 from datetime import date, datetime
 
 from components.calendar import CalendarComponent
 from components.time_picker import create_time_picker
-from utils.storage import load_tasks, save_tasks
+from utils.storage import init_storage, load_tasks, save_tasks
 from utils.date_parser import parse_datetime_from_text
 
 
@@ -24,7 +25,7 @@ def format_date_full(date_str):
     return f'{weekdays[d.weekday()]}, {d.day} {months[d.month]} {d.year}'
 
 
-def main(page: ft.Page):
+async def main(page: ft.Page):
     page.title = 'Мои задачи'
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 30
@@ -33,6 +34,13 @@ def main(page: ft.Page):
     # Состояние приложения
     selected_date = date.today().strftime('%Y-%m-%d')
     selected_time = ''
+    storage_paths = ft.StoragePaths()
+    try:
+        db_dir = await storage_paths.get_library_directory()
+    except Exception:
+        db_dir = os.path.dirname(__file__)
+    db_path = os.path.join(db_dir, 'tasks.db')
+    init_storage(db_path)
     tasks = load_tasks()
 
     # Список задач
@@ -121,12 +129,15 @@ def main(page: ft.Page):
             show_snackbar('Укажите время в тексте или выберите вручную')
             return
 
+        now_ms = int(datetime.now().timestamp() * 1000)
         new_task = {
-            'id': str(int(datetime.now().timestamp() * 1000)),
+            'id': str(now_ms),
             'text': text,
             'time': final_time,
             'date': final_date,
             'completed': False,
+            'createdAt': now_ms,
+            'updatedAt': now_ms,
         }
 
         tasks.insert(0, new_task)
@@ -141,6 +152,7 @@ def main(page: ft.Page):
         for task in tasks:
             if task['id'] == task_id:
                 task['completed'] = not task['completed']
+                task['updatedAt'] = int(datetime.now().timestamp() * 1000)
                 break
         save_tasks(tasks)
         refresh_task_list()
