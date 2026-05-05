@@ -1,50 +1,78 @@
-# Welcome to your Expo app 👋
+# Diary App — JavaScript Version
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Перенос приложения дневника на JavaScript-стек.
 
-## Get started
+## Оригинал
 
-1. Install dependencies
+Оригинальный проект: [RedX95/diary](https://github.com/RedX95/diary)  
+Fork: [Itami00001/diary](https://github.com/Itami00001/diary)
 
-   ```bash
-   npm install
-   ```
+## Предполагаемый стек технологий
 
-2. Start the app
+### Backend
 
-   ```bash
-   npx expo start
-   ```
+| Компонент | Технология |
+|-----------|------------|
+| Рантайм | **Node.js** (замена Expo/Metro) |
+| Фреймворк | **Express.js** — REST API |
+| База данных | **MongoDB** — документо-ориентированное хранилище |
+| ODM | **Mongoose** — работа с MongoDB |
+| Контейнеризация | **Docker** + **Docker Compose** |
+| Веб-сервер | **Nginx** (reverse proxy, статика) |
 
-In the output, you'll find options to open the app in a
+### Frontend
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+| Компонент | Технология |
+|-----------|------------|
+| Язык | **JavaScript (ES6+)** |
+| UI фреймворк | **React** — компонентный интерфейс |
+| Стилизация | **CSS Modules** или **Tailwind CSS** |
+| State Management | **Redux Toolkit** или **Zustand** |
+| HTTP клиент | **Axios** |
+| Дата/время | **date-fns** или **dayjs** |
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+### Инфраструктура
 
-## Get a fresh project
+| Компонент | Технология |
+|-----------|------------|
+| Контейнеризация | Docker |
+| Оркестрация | Docker Compose |
+| База данных | MongoDB |
+| Кэш (опционально) | Redis |
 
-When you're ready, run:
+## Структура проекта
 
-```bash
-npm run reset-project
+```
+.
+├── docker-compose.yml      # Конфигурация Docker
+├── backend/
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── src/
+│   │   ├── server.js
+│   │   ├── routes/
+│   │   ├── models/
+│   │   └── controllers/
+│   └── .env
+└── frontend/
+    ├── Dockerfile
+    ├── package.json
+    ├── src/
+    │   ├── App.jsx
+    │   ├── components/
+    │   └── pages/
+    └── .env
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## TODO
 
-## Learn more
+- [ ] Настроить Docker и Docker Compose
+- [ ] Создать Express backend с MongoDB
+- [ ] Создать React frontend
+- [ ] Реализовать CRUD для записей дневника
+- [ ] Добавить авторизацию (JWT)
+- [ ] Деплой
 
-To learn more about developing your project with Expo, look at the following resources:
+## Ветка
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+`JavaScript` — активная ветка разработки
