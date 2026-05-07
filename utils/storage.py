@@ -4,24 +4,43 @@ import sqlite3
 _DB_PATH: str | None = None
 
 
+def _ensure_schema(conn: sqlite3.Connection):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY,
+          user_id TEXT,
+          text TEXT NOT NULL,
+          time TEXT NOT NULL,
+          date TEXT NOT NULL,
+          completed INTEGER NOT NULL DEFAULT 0,
+          deleted INTEGER NOT NULL DEFAULT 0,
+          dirty INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """
+    )
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "user_id" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN user_id TEXT")
+    if "deleted" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+    if "dirty" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_user_updated ON tasks(user_id, updated_at)"
+    )
+
+
 def init_storage(db_path: str):
     global _DB_PATH
     _DB_PATH = db_path
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     with sqlite3.connect(_DB_PATH) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-              id TEXT PRIMARY KEY,
-              text TEXT NOT NULL,
-              time TEXT NOT NULL,
-              date TEXT NOT NULL,
-              completed INTEGER NOT NULL DEFAULT 0,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
-            )
-            """
-        )
+        _ensure_schema(conn)
         conn.commit()
 
 
@@ -36,17 +55,20 @@ def load_tasks():
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, text, time, date, completed, created_at, updated_at FROM tasks"
+            "SELECT id, user_id, text, time, date, completed, deleted, dirty, created_at, updated_at FROM tasks"
         ).fetchall()
         tasks = []
         for r in rows:
             tasks.append(
                 {
                     "id": r["id"],
+                    "userId": r["user_id"],
                     "text": r["text"],
                     "time": r["time"],
                     "date": r["date"],
                     "completed": bool(r["completed"]),
+                    "deleted": bool(r["deleted"]),
+                    "dirty": bool(r["dirty"]),
                     "createdAt": r["created_at"],
                     "updatedAt": r["updated_at"],
                 }
@@ -64,23 +86,41 @@ def save_tasks(tasks):
             updated_at = int(t.get("updatedAt") or now_ms)
             conn.execute(
                 """
-                INSERT INTO tasks (id, text, time, date, completed, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, user_id, text, time, date, completed, deleted, dirty, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                  user_id=excluded.user_id,
                   text=excluded.text,
                   time=excluded.time,
                   date=excluded.date,
                   completed=excluded.completed,
+                  deleted=excluded.deleted,
+                  dirty=excluded.dirty,
                   updated_at=excluded.updated_at
                 """,
                 (
                     t["id"],
+                    t.get("userId"),
                     t["text"],
                     t["time"],
                     t["date"],
                     1 if t.get("completed") else 0,
+                    1 if t.get("deleted") else 0,
+                    1 if t.get("dirty", True) else 0,
                     created_at,
                     updated_at,
                 ),
             )
+        conn.commit()
+
+
+def set_tasks_dirty(task_ids: list[str], dirty: bool):
+    if not task_ids:
+        return
+    db_path = _require_db()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            f"UPDATE tasks SET dirty = ? WHERE id IN ({','.join(['?'] * len(task_ids))})",
+            [1 if dirty else 0, *task_ids],
+        )
         conn.commit()
