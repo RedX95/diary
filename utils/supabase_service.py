@@ -1,7 +1,8 @@
 import os
-from typing import Any
+from dotenv import load_dotenv
+from supabase import Client, ClientOptions, create_client
 
-from supabase import Client, create_client
+load_dotenv()
 
 
 def get_supabase_client(access_token: str | None = None) -> Client:
@@ -11,11 +12,11 @@ def get_supabase_client(access_token: str | None = None) -> Client:
     if not url or not key:
         raise RuntimeError("SUPABASE_URL / SUPABASE_ANON_KEY are not set")
 
-    options: dict[str, Any] = {}
+    headers: dict[str, str] = {}
     if access_token:
-        options["headers"] = {"Authorization": f"Bearer {access_token}"}
+        headers["Authorization"] = f"Bearer {access_token}"
 
-    return create_client(url, key, options)
+    return create_client(url, key, options=ClientOptions(headers=headers))
 
 
 def sign_in_with_password(email: str, password: str) -> dict:

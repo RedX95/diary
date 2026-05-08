@@ -11,6 +11,7 @@ ENV/
 
 # App data
 tasks.db
+.env
 
 # Flet / build artifacts
 build/

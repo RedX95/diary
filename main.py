@@ -9,6 +9,7 @@ from utils.date_parser import parse_datetime_from_text
 from utils.storage import init_storage, load_tasks, save_tasks
 from utils.supabase_service import sign_in_with_password, sign_up
 from utils.sync import sync_once
+from utils.session import init_session_storage, load_session, save_session
 
 
 def format_date_display(date_str: str) -> str:
@@ -63,16 +64,20 @@ async def main(page: ft.Page):
     db_path = os.path.join(db_dir, "tasks.db")
     init_storage(db_path)
 
+    init_session_storage(db_dir)
+    session_data = load_session()
+
     tasks = load_tasks()
 
-    access_token = page.client_storage.get("sb_access_token")
-    user_id = page.client_storage.get("sb_user_id")
+    access_token = session_data.get("access_token")
+    user_id = session_data.get("user_id")
 
     task_list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
 
     def show_snackbar(msg: str):
-        page.snack_bar = ft.SnackBar(content=ft.Text(msg))
-        page.snack_bar.open = True
+        sb = ft.SnackBar(content=ft.Text(msg))
+        page.overlay.append(sb)
+        sb.open = True
         page.update()
 
     def refresh_task_list():
@@ -304,6 +309,7 @@ async def main(page: ft.Page):
         def on_login(e=None):
             nonlocal access_token, user_id, tasks
             try:
+                show_snackbar("Выполняю вход...")
                 res = sign_in_with_password(email.value.strip(), password.value)
                 sess = res.get("session") or {}
                 access_token = sess.get("access_token")
@@ -312,8 +318,7 @@ async def main(page: ft.Page):
                 if not access_token or not user_id:
                     raise RuntimeError("Не удалось получить access_token/user_id")
 
-                page.client_storage.set("sb_access_token", access_token)
-                page.client_storage.set("sb_user_id", user_id)
+                save_session({"access_token": access_token, "user_id": user_id})
 
                 tasks = sync_once(access_token=access_token, user_id=user_id)
                 open_app_view()
@@ -322,6 +327,7 @@ async def main(page: ft.Page):
 
         def on_register(e=None):
             try:
+                show_snackbar("Регистрирую...")
                 sign_up(email.value.strip(), password.value)
                 show_snackbar("Аккаунт создан. Теперь войдите.")
             except Exception as ex:
