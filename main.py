@@ -9,7 +9,7 @@ from utils.date_parser import parse_datetime_from_text
 from utils.storage import init_storage, load_tasks, save_tasks
 from utils.supabase_service import sign_in_with_password, sign_up
 from utils.sync import sync_once
-from utils.session import init_session_storage, load_session, save_session
+from utils.session import clear_session, init_session_storage, load_session, save_session
 
 
 def format_date_display(date_str: str) -> str:
@@ -355,11 +355,21 @@ async def main(page: ft.Page):
 
     def open_app_view():
         page.controls.clear()
+
+        def on_logout(e=None):
+            nonlocal access_token, user_id, tasks
+            access_token = None
+            user_id = None
+            tasks = load_tasks()
+            clear_session()
+            open_auth_view()
+
         page.add(
             ft.Row(
                 controls=[
                     ft.Text("Мои задачи", size=28, weight=ft.FontWeight.BOLD, expand=True),
                     ft.IconButton(icon=ft.Icons.SYNC, on_click=do_sync),
+                    ft.IconButton(icon=ft.Icons.LOGOUT, on_click=on_logout),
                 ]
             ),
             ft.Container(
@@ -400,8 +410,12 @@ async def main(page: ft.Page):
         try:
             tasks = sync_once(access_token=access_token, user_id=user_id)
         except Exception:
-            pass
-        open_app_view()
+            clear_session()
+            access_token = None
+            user_id = None
+            open_auth_view()
+        else:
+            open_app_view()
     else:
         open_auth_view()
 
