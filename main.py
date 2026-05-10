@@ -1,5 +1,9 @@
 import os
+import json
+import asyncio
 from datetime import date, datetime
+from urllib.parse import quote_plus
+from urllib.request import Request, urlopen
 
 import flet as ft
 
@@ -80,6 +84,22 @@ async def main(page: ft.Page):
         sb.open = True
         page.update()
 
+    def open_url(url: str | None):
+        if not url:
+            return
+        try:
+            res = page.launch_url(url)
+            if asyncio.iscoroutine(res):
+                asyncio.create_task(res)
+                return
+            return
+        except Exception:
+            pass
+        try:
+            ft.launch_url(url)
+        except Exception as ex:
+            show_snackbar(f"Не удалось открыть ссылку: {ex}")
+
     def refresh_task_list():
         filtered = [t for t in tasks if (not t.get("deleted")) and t.get("date") == selected_date]
         filtered.sort(key=lambda t: t.get("time") or "")
@@ -106,44 +126,69 @@ async def main(page: ft.Page):
 
     def build_task_item(task):
         is_completed = bool(task.get("completed"))
+        map_url = task.get("mapUrl")
         return ft.Container(
-            content=ft.Row(
+            content=ft.Column(
                 controls=[
-                    ft.Container(
-                        content=ft.Text(task.get("time", ""), size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE),
-                        bgcolor=ft.Colors.GREY_100,
-                        padding=ft.Padding(12, 6, 12, 6),
-                        border_radius=8,
-                    ),
-                    ft.Container(
-                        content=ft.Text(
-                            (task.get("date", "0000-00-00")[8:10] + "." + task.get("date", "0000-00-00")[5:7]),
-                            size=15,
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.GREEN_700,
-                        ),
-                        bgcolor=ft.Colors.GREEN_50,
-                        padding=ft.Padding(12, 6, 12, 6),
-                        border_radius=8,
+                    ft.Row(
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    ft.Container(
+                                        content=ft.Text(
+                                            task.get("time", ""),
+                                            size=15,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.BLUE,
+                                        ),
+                                        bgcolor=ft.Colors.GREY_100,
+                                        padding=ft.Padding(12, 6, 12, 6),
+                                        border_radius=8,
+                                    ),
+                                    ft.Container(
+                                        content=ft.Text(
+                                            (task.get("date", "0000-00-00")[8:10] + "." + task.get("date", "0000-00-00")[5:7]),
+                                            size=15,
+                                            weight=ft.FontWeight.BOLD,
+                                            color=ft.Colors.GREEN_700,
+                                        ),
+                                        bgcolor=ft.Colors.GREEN_50,
+                                        padding=ft.Padding(12, 6, 12, 6),
+                                        border_radius=8,
+                                    ),
+                                ],
+                                spacing=8,
+                            ),
+                            ft.Row(
+                                controls=[
+                                    ft.IconButton(
+                                        icon=ft.Icons.CHECK_CIRCLE if is_completed else ft.Icons.RADIO_BUTTON_UNCHECKED,
+                                        icon_color=ft.Colors.GREEN if is_completed else ft.Colors.GREY_400,
+                                        on_click=lambda e, tid=task["id"]: toggle_task(tid),
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.DELETE_OUTLINE,
+                                        icon_color=ft.Colors.RED_400,
+                                        on_click=lambda e, tid=task["id"]: delete_task(tid),
+                                    ),
+                                ],
+                                spacing=0,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Text(
                         task.get("text", ""),
                         size=17,
                         color=ft.Colors.GREY_500 if is_completed else ft.Colors.BLACK,
-                        expand=True,
                     ),
-                    ft.IconButton(
-                        icon=ft.Icons.CHECK_CIRCLE if is_completed else ft.Icons.RADIO_BUTTON_UNCHECKED,
-                        icon_color=ft.Colors.GREEN if is_completed else ft.Colors.GREY_400,
-                        on_click=lambda e, tid=task["id"]: toggle_task(tid),
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.DELETE_OUTLINE,
-                        icon_color=ft.Colors.RED_400,
-                        on_click=lambda e, tid=task["id"]: delete_task(tid),
+                    ft.TextButton(
+                        "Открыть на карте",
+                        visible=bool(map_url),
+                        on_click=lambda e, u=map_url: open_url(u),
                     ),
                 ],
-                alignment=ft.MainAxisAlignment.START,
+                spacing=10,
             ),
             bgcolor=ft.Colors.WHITE,
             border_radius=16,
@@ -173,10 +218,48 @@ async def main(page: ft.Page):
             return
 
         now_ms = int(datetime.now().timestamp() * 1000)
+
+        address_value = (address_input.value or "").strip()
+        lat = None
+        lon = None
+        map_url = None
+
+        if address_value:
+            try:
+                city_bias = (os.getenv("NOMINATIM_CITY") or "").strip()
+                query = f"{city_bias}, {address_value}" if city_bias else address_value
+                q = quote_plus(query)
+                url = f"https://nominatim.openstreetmap.org/search?q={q}&format=json&limit=1&addressdetails=1"
+                req = Request(
+                    url,
+                    headers={
+                        "User-Agent": "DiaryFlet/1.0",
+                        "Accept": "application/json",
+                    },
+                    method="GET",
+                )
+                with urlopen(req, timeout=10) as resp:
+                    payload = resp.read().decode("utf-8")
+                data = json.loads(payload) or []
+                if data:
+                    lat = float(data[0].get("lat")) if data[0].get("lat") is not None else None
+                    lon = float(data[0].get("lon")) if data[0].get("lon") is not None else None
+
+                if lat is not None and lon is not None:
+                    map_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
+                else:
+                    show_snackbar("Адрес не найден (Nominatim)")
+            except Exception as ex:
+                show_snackbar(f"Ошибка геокодинга: {ex}")
+
         new_task = {
             "id": str(now_ms),
             "userId": user_id,
             "text": text,
+            "address": address_value or None,
+            "lat": lat,
+            "lon": lon,
+            "mapUrl": map_url,
             "time": final_time,
             "date": final_date,
             "completed": False,
@@ -190,6 +273,7 @@ async def main(page: ft.Page):
         save_tasks(tasks)
 
         task_input.value = ""
+        address_input.value = ""
         selected_time = ""
         time_display.content = ft.Text("18:30", color=ft.Colors.GREY_400, size=16)
 
@@ -271,6 +355,14 @@ async def main(page: ft.Page):
         filled=True,
         bgcolor=ft.Colors.WHITE,
         on_change=on_task_text_change,
+    )
+
+    address_input = ft.TextField(
+        hint_text="Адрес (необязательно)",
+        expand=True,
+        border_radius=12,
+        filled=True,
+        bgcolor=ft.Colors.WHITE,
     )
 
     time_display = ft.Container(
@@ -383,20 +475,26 @@ async def main(page: ft.Page):
                 controls=[ft.Text(format_date_full(selected_date), size=18, weight=ft.FontWeight.W_600, expand=True)],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
-            ft.Row(
+            ft.Column(
                 controls=[
                     task_input,
-                    time_display,
-                    date_display,
-                    ft.Container(
-                        content=ft.Icon(ft.Icons.ADD, color=ft.Colors.WHITE, size=28),
-                        bgcolor=ft.Colors.BLUE,
-                        border_radius=16,
-                        width=56,
-                        height=56,
-                        alignment=ft.Alignment(0.5, 0.5),
-                        on_click=add_task,
-                        shadow=ft.BoxShadow(blur_radius=8, color=ft.Colors.with_opacity(0.3, ft.Colors.BLUE)),
+                    address_input,
+                    ft.Row(
+                        controls=[
+                            time_display,
+                            date_display,
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.ADD, color=ft.Colors.WHITE, size=28),
+                                bgcolor=ft.Colors.BLUE,
+                                border_radius=16,
+                                width=56,
+                                height=56,
+                                alignment=ft.Alignment(0.5, 0.5),
+                                on_click=add_task,
+                                shadow=ft.BoxShadow(blur_radius=8, color=ft.Colors.with_opacity(0.3, ft.Colors.BLUE)),
+                            ),
+                        ],
+                        spacing=10,
                     ),
                 ],
                 spacing=10,

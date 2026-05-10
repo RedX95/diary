@@ -37,6 +37,10 @@ def sync_once(access_token: str, user_id: str):
                     "id": t["id"],
                     "user_id": user_id,
                     "text": t["text"],
+                    "address": t.get("address"),
+                    "lat": t.get("lat"),
+                    "lon": t.get("lon"),
+                    "map_url": t.get("mapUrl"),
                     "time": t["time"],
                     "date": t["date"],
                     "completed": bool(t.get("completed")),
@@ -55,7 +59,7 @@ def sync_once(access_token: str, user_id: str):
 
     remote = (
         client.table(_table())
-        .select("id,user_id,text,time,date,completed,deleted,created_at,updated_at")
+        .select("id,user_id,text,address,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
         .eq("user_id", user_id)
         .execute()
     )
@@ -73,6 +77,10 @@ def sync_once(access_token: str, user_id: str):
             "id": r["id"],
             "userId": r.get("user_id"),
             "text": r.get("text") or "",
+            "address": r.get("address"),
+            "lat": r.get("lat"),
+            "lon": r.get("lon"),
+            "mapUrl": r.get("map_url"),
             "time": r.get("time") or "",
             "date": r.get("date") or "",
             "completed": bool(r.get("completed")),
