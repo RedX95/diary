@@ -50,11 +50,33 @@ def format_date_full(date_str: str) -> str:
     return f"{weekdays[d.weekday()]}, {d.day} {months[d.month]} {d.year}"
 
 
+def _static_osm_map_url(lat: float, lon: float, width: int = 320, height: int = 320, zoom: int = 16) -> str:
+    lat_s = f"{lat:.6f}"
+    lon_s = f"{lon:.6f}"
+    width = max(1, min(int(width), 650))
+    height = max(1, min(int(height), 450))
+    size = f"{width},{height}"
+    # Static mini-map: always show Simferopol city overview, place marker at task coordinates.
+    # Center: Simferopol (approx.)
+    city_ll = "34.1108,44.9521"
+    city_zoom = 11
+    return f"https://static-maps.yandex.ru/1.x/?ll={city_ll}&size={size}&z={city_zoom}&l=map&pt={lon_s},{lat_s},pm2rdm"
+    
+
 async def main(page: ft.Page):
     page.title = "Мои задачи"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 30
     page.scroll = ft.ScrollMode.AUTO
+
+    fullscreen_map_url: str | None = None
+
+    root_view = ft.View(route="/", controls=[], scroll=ft.ScrollMode.AUTO)
+    page.views.clear()
+    page.views.append(root_view)
+
+    def root_controls():
+        return page.views[0].controls
 
     selected_date = date.today().strftime("%Y-%m-%d")
     selected_time = ""
@@ -76,13 +98,73 @@ async def main(page: ft.Page):
     access_token = session_data.get("access_token")
     user_id = session_data.get("user_id")
 
-    task_list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+    task_list = ft.Column(spacing=10)
 
     def show_snackbar(msg: str):
         sb = ft.SnackBar(content=ft.Text(msg))
         page.overlay.append(sb)
         sb.open = True
         page.update()
+
+    def open_map_image(url: str | None):
+        nonlocal fullscreen_map_url
+        if not url:
+            return
+        fullscreen_map_url = url
+        page.go("/map")
+
+    def build_map_view() -> ft.View:
+        nonlocal fullscreen_map_url
+        url = fullscreen_map_url
+        img = ft.Image(
+            src=url or "",
+            width=650,
+            height=450,
+            fit=ft.ImageFit.CONTAIN if hasattr(ft, "ImageFit") else "contain",
+            error_content=ft.Text(
+                "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєР°СЂС‚Сѓ",
+                color=ft.Colors.WHITE,
+                size=16,
+            ),
+        )
+
+        viewer_cls = getattr(ft, "InteractiveViewer", None)
+        content: ft.Control
+        if viewer_cls:
+            try:
+                content = viewer_cls(content=img, expand=True, min_scale=0.5, max_scale=4)
+            except Exception:
+                content = img
+        else:
+            content = img
+
+        return ft.View(
+            route="/map",
+            controls=[
+                ft.AppBar(
+                    title=ft.Text("Карта"),
+                    leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
+                ),
+                ft.Container(content=content, expand=True, bgcolor=ft.Colors.BLACK),
+            ],
+            padding=0,
+        )
+
+    def route_change(e=None):
+        if page.route == "/map":
+            if len(page.views) == 1 or page.views[-1].route != "/map":
+                page.views.append(build_map_view())
+        else:
+            while len(page.views) > 1:
+                page.views.pop()
+        page.update()
+
+    def view_pop(e: ft.ViewPopEvent):
+        page.views.pop()
+        page.go(page.views[-1].route)
+
+    page.on_route_change = route_change
+    page.on_view_pop = view_pop
 
     def open_url(url: str | None):
         if not url:
@@ -127,6 +209,62 @@ async def main(page: ft.Page):
     def build_task_item(task):
         is_completed = bool(task.get("completed"))
         map_url = task.get("mapUrl")
+        lat = task.get("lat")
+        lon = task.get("lon")
+
+        map_controls: list[ft.Control] = []
+        if lat is not None and lon is not None:
+            try:
+                lat_f = float(lat)
+                lon_f = float(lon)
+            except Exception:
+                lat_f = None
+                lon_f = None
+
+            if lat_f is not None and lon_f is not None:
+                map_size = 220
+                current_lat = lat_f
+                current_lon = lon_f
+
+                img = ft.Image(
+                    src=_static_osm_map_url(current_lat, current_lon, width=map_size, height=map_size),
+                    width=map_size,
+                    height=map_size,
+                    fit=ft.ImageFit.CONTAIN if hasattr(ft, "ImageFit") else "contain",
+                )
+
+                def on_map_tap(e=None):
+                    show_snackbar("Открываю карту...")
+                    open_map_image(_static_osm_map_url(current_lat, current_lon, width=650, height=450))
+
+                clickable = ft.Container(
+                    content=img,
+                    on_click=on_map_tap,
+                    ink=True,
+                    border_radius=12,
+                )
+
+                tappable = clickable
+
+                def update_map(new_lat, new_lon):
+                    nonlocal current_lat, current_lon
+                    try:
+                        current_lat = float(new_lat)
+                        current_lon = float(new_lon)
+                        img.src = _static_osm_map_url(current_lat, current_lon, width=map_size, height=map_size)
+                        img.update()
+                    except Exception:
+                        pass
+
+                update_map(lat_f, lon_f)
+                map_controls.append(tappable)
+                map_controls.append(
+                    ft.TextButton(
+                        "Увеличить карту",
+                        on_click=on_map_tap,
+                    )
+                )
+
         return ft.Container(
             content=ft.Column(
                 controls=[
@@ -183,10 +321,11 @@ async def main(page: ft.Page):
                         color=ft.Colors.GREY_500 if is_completed else ft.Colors.BLACK,
                     ),
                     ft.TextButton(
-                        "Открыть на карте",
+                        task.get("address", ""),
                         visible=bool(map_url),
                         on_click=lambda e, u=map_url: open_url(u),
                     ),
+                    *map_controls,
                 ],
                 spacing=10,
             ),
@@ -393,7 +532,7 @@ async def main(page: ft.Page):
     )
 
     def open_auth_view():
-        page.controls.clear()
+        root_controls().clear()
 
         email = ft.TextField(label="Email", width=320)
         password = ft.TextField(label="Пароль", width=320, password=True, can_reveal_password=True)
@@ -425,7 +564,8 @@ async def main(page: ft.Page):
             except Exception as ex:
                 show_snackbar(f"Ошибка регистрации: {ex}")
 
-        page.add(
+        root_controls().extend(
+            [
             ft.Text("Вход", size=28, weight=ft.FontWeight.BOLD),
             email,
             password,
@@ -441,12 +581,13 @@ async def main(page: ft.Page):
                 size=12,
                 color=ft.Colors.GREY_600,
             ),
+            ]
         )
 
         page.update()
 
     def open_app_view():
-        page.controls.clear()
+        root_controls().clear()
 
         def on_logout(e=None):
             nonlocal access_token, user_id, tasks
@@ -456,7 +597,8 @@ async def main(page: ft.Page):
             clear_session()
             open_auth_view()
 
-        page.add(
+        root_controls().extend(
+            [
             ft.Row(
                 controls=[
                     ft.Text("Мои задачи", size=28, weight=ft.FontWeight.BOLD, expand=True),
@@ -500,6 +642,7 @@ async def main(page: ft.Page):
                 spacing=10,
             ),
             task_list,
+            ]
         )
         refresh_task_list()
         page.update()
