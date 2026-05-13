@@ -30,7 +30,7 @@ python main.py
 
 ```bash
 flutter doctor --android-licenses
-flet build apk
+PowerShell -ExecutionPolicy Bypass -File .\build_apk.ps1
 ```
 
 Готовый APK:

@@ -1,4 +1,5 @@
-flet>=0.25.0
+flet>=0.82.0
+flet-stt>=0.1.5
 dateparser>=1.2.0
 supabase>=2.0.0
 python-dotenv>=1.0.1

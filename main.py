@@ -6,6 +6,13 @@ from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
 import flet as ft
+try:
+    from flet_stt import FletStt, SttError, SttErrorData, SttResult, SttStatus
+except ImportError:
+    FletStt = None
+
+    class SttError(Exception):
+        pass
 
 from components.calendar import CalendarComponent
 from components.time_picker import create_time_picker
@@ -99,12 +106,23 @@ async def main(page: ft.Page):
     user_id = session_data.get("user_id")
 
     task_list = ft.Column(spacing=10)
+    stt = FletStt() if FletStt else None
+    stt_available = stt is not None
+    stt_initialized = False
+    selected_stt_locale = ""
+    voice_target: ft.TextField | None = None
+    voice_base_text = ""
+    voice_button: ft.IconButton | None = None
+    voice_listening = False
 
     def show_snackbar(msg: str):
         sb = ft.SnackBar(content=ft.Text(msg))
         page.overlay.append(sb)
         sb.open = True
         page.update()
+
+    if stt is not None:
+        page.services.append(stt)
 
     def open_map_image(url: str | None):
         nonlocal fullscreen_map_url
@@ -440,9 +458,8 @@ async def main(page: ft.Page):
         save_tasks(tasks)
         refresh_task_list()
 
-    def on_task_text_change(e):
+    def apply_task_datetime_from_text(text: str):
         nonlocal selected_time
-        text = e.control.value
         parsed = parse_datetime_from_text(text)
         if parsed.get("has_time"):
             selected_time = parsed.get("time")
@@ -450,6 +467,9 @@ async def main(page: ft.Page):
             page.update()
         if parsed.get("has_date"):
             on_calendar_date_select(parsed.get("date"))
+
+    def on_task_text_change(e):
+        apply_task_datetime_from_text(e.control.value or "")
 
     def on_time_selected(time_str: str):
         nonlocal selected_time
@@ -486,6 +506,148 @@ async def main(page: ft.Page):
         except Exception as ex:
             show_snackbar(f"Ошибка синхронизации: {ex}")
 
+    def update_voice_buttons():
+        buttons = (task_mic_button, address_mic_button)
+        for button in buttons:
+            if not stt_available:
+                button.icon = ft.Icons.MIC_OFF
+                button.icon_color = ft.Colors.GREY_400
+                button.tooltip = "Голосовой ввод недоступен"
+                button.disabled = True
+                try:
+                    button.update()
+                except Exception:
+                    pass
+                continue
+
+            active = voice_listening and button == voice_button
+            button.icon = ft.Icons.MIC if active else ft.Icons.MIC_NONE
+            button.icon_color = ft.Colors.RED_500 if active else ft.Colors.BLUE
+            button.tooltip = "Остановить голосовой ввод" if active else "Голосовой ввод"
+            button.disabled = False
+            try:
+                button.update()
+            except Exception:
+                pass
+
+    def apply_voice_text(text: str):
+        if not voice_target:
+            return
+        recognized = (text or "").strip()
+        if not recognized:
+            return
+
+        base = voice_base_text.strip()
+        voice_target.value = f"{base} {recognized}".strip() if base else recognized
+        if voice_target == task_input:
+            apply_task_datetime_from_text(voice_target.value or "")
+        try:
+            voice_target.update()
+        except Exception:
+            page.update()
+
+    def on_stt_result(e):
+        try:
+            result = SttResult(e)
+        except Exception:
+            return
+        apply_voice_text(result.text)
+
+    def on_stt_error(e):
+        nonlocal voice_listening
+        voice_listening = False
+        update_voice_buttons()
+        try:
+            error = SttErrorData(e)
+            show_snackbar(f"Ошибка распознавания: {error.error}")
+        except Exception:
+            show_snackbar("Ошибка распознавания речи")
+
+    def on_stt_status(e):
+        nonlocal voice_listening
+        try:
+            status = SttStatus(e)
+        except Exception:
+            return
+        voice_listening = status.listening
+        update_voice_buttons()
+
+    async def resolve_stt_locale() -> str:
+        if not stt:
+            return ""
+        try:
+            locales = await stt.locales()
+        except Exception:
+            locales = []
+
+        locale_ids = {str(item.get("id", "")) for item in locales if isinstance(item, dict)}
+        for candidate in ("ru_RU", "ru-RU", "ru"):
+            if candidate in locale_ids:
+                return candidate
+
+        for loc in locale_ids:
+            if loc.lower().startswith("ru"):
+                return loc
+
+        try:
+            system_loc = await stt.system_locale()
+            system_id = str(system_loc.get("id", "")).strip() if isinstance(system_loc, dict) else ""
+            if system_id:
+                return system_id
+        except Exception:
+            pass
+
+        return ""
+
+    async def toggle_voice_input(target: ft.TextField, button: ft.IconButton):
+        nonlocal stt_initialized, voice_base_text, voice_button, voice_listening, voice_target, selected_stt_locale
+
+        try:
+            if not stt_available or stt is None:
+                show_snackbar("Установите пакет flet-stt для голосового ввода")
+                return
+
+            voice_target = target
+            voice_button = button
+
+            if voice_listening:
+                await stt.stop()
+                voice_listening = False
+                update_voice_buttons()
+                return
+
+            voice_base_text = target.value or ""
+
+            if not stt_initialized:
+                stt_initialized = await stt.initialize()
+                if stt_initialized:
+                    selected_stt_locale = await resolve_stt_locale()
+
+            if not stt_initialized:
+                show_snackbar("Голосовой ввод недоступен на этом устройстве")
+                return
+
+            voice_listening = True
+            update_voice_buttons()
+            show_snackbar("Говорите...")
+            await stt.listen(
+                locale_id=selected_stt_locale,
+                listen_for_seconds=45,
+                pause_for_seconds=3,
+                partial_results=True,
+                listen_mode="dictation",
+                cancel_on_error=True,
+                cloud_timeout_seconds=20,
+            )
+        except SttError as ex:
+            voice_listening = False
+            update_voice_buttons()
+            show_snackbar(f"Не удалось запустить голосовой ввод: {ex}")
+        except Exception as ex:
+            voice_listening = False
+            update_voice_buttons()
+            show_snackbar(f"Ошибка голосового ввода: {ex}")
+
     # UI controls
     task_input = ft.TextField(
         hint_text="Что нужно сделать?",
@@ -503,6 +665,33 @@ async def main(page: ft.Page):
         filled=True,
         bgcolor=ft.Colors.WHITE,
     )
+
+    def on_task_mic_click(e):
+        page.run_task(toggle_voice_input, task_input, task_mic_button)
+
+    def on_address_mic_click(e):
+        page.run_task(toggle_voice_input, address_input, address_mic_button)
+
+    task_mic_button = ft.IconButton(
+        icon=ft.Icons.MIC_NONE,
+        icon_color=ft.Colors.BLUE,
+        tooltip="Голосовой ввод заметки",
+        on_click=on_task_mic_click,
+        disabled=not stt_available,
+    )
+
+    address_mic_button = ft.IconButton(
+        icon=ft.Icons.MIC_NONE,
+        icon_color=ft.Colors.BLUE,
+        tooltip="Голосовой ввод адреса",
+        on_click=on_address_mic_click,
+        disabled=not stt_available,
+    )
+
+    if stt is not None:
+        stt.on_result = on_stt_result
+        stt.on_error = on_stt_error
+        stt.on_status = on_stt_status
 
     time_display = ft.Container(
         content=ft.Text("18:30", color=ft.Colors.GREY_400, size=16),
@@ -571,15 +760,10 @@ async def main(page: ft.Page):
             password,
             ft.Row(
                 controls=[
-                    ft.ElevatedButton("Войти", on_click=on_login),
+                    ft.Button("Войти", on_click=on_login),
                     ft.OutlinedButton("Регистрация", on_click=on_register),
                 ],
                 spacing=12,
-            ),
-            ft.Text(
-                "Нужно указать переменные окружения: SUPABASE_URL и SUPABASE_ANON_KEY",
-                size=12,
-                color=ft.Colors.GREY_600,
             ),
             ]
         )
@@ -619,8 +803,16 @@ async def main(page: ft.Page):
             ),
             ft.Column(
                 controls=[
-                    task_input,
-                    address_input,
+                    ft.Row(
+                        controls=[task_input, task_mic_button],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row(
+                        controls=[address_input, address_mic_button],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                     ft.Row(
                         controls=[
                             time_display,
