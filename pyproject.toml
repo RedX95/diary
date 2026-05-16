@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "flet>=0.82.0",
     "flet-stt>=0.1.5",
+    "flet-contact-launcher>=0.1.0",
     "dateparser>=1.2.0",
     "supabase>=2.0.0",
     "python-dotenv>=1.0.1",
@@ -14,6 +15,11 @@ dependencies = [
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true
 "android.permission.RECORD_AUDIO" = true
+"android.permission.READ_CONTACTS" = true
 
 [tool.flet.app]
-exclude = ["flet_stt"]
+exclude = ["packages"]
+
+[tool.flet.dev_packages]
+"flet-stt" = "packages/flet_stt"
+"flet-contact-launcher" = "packages/flet_contact_launcher"

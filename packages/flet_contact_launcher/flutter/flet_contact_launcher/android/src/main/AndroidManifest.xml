@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <queries>
+        <package android:name="com.samsung.android.app.contacts" />
+        <package android:name="com.google.android.contacts" />
+        <package android:name="com.android.contacts" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+        <intent>
+            <action android:name="com.android.contacts.action.FILTER_CONTACTS" />
+        </intent>
+    </queries>
+</manifest>

@@ -1,0 +1,31 @@
+[project]
+name = "flet-contact-launcher"
+version = "0.1.0"
+description = "Flet service for opening Android contacts by phone number"
+requires-python = ">=3.11"
+dependencies = ["flet>=0.82.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"*" = ["*"]
+
+[tool.setuptools.data-files]
+"flutter/flet_contact_launcher" = ["flutter/flet_contact_launcher/pubspec.yaml"]
+"flutter/flet_contact_launcher/lib" = ["flutter/flet_contact_launcher/lib/flet_contact_launcher.dart"]
+"flutter/flet_contact_launcher/lib/src" = [
+    "flutter/flet_contact_launcher/lib/src/extension.dart",
+    "flutter/flet_contact_launcher/lib/src/contact_launcher_service.dart",
+]
+"flutter/flet_contact_launcher/android" = ["flutter/flet_contact_launcher/android/build.gradle"]
+"flutter/flet_contact_launcher/android/src/main" = [
+    "flutter/flet_contact_launcher/android/src/main/AndroidManifest.xml",
+]
+"flutter/flet_contact_launcher/android/src/main/kotlin/com/mi/flet_contact_launcher" = [
+    "flutter/flet_contact_launcher/android/src/main/kotlin/com/mi/flet_contact_launcher/FletContactLauncherPlugin.kt",
+]

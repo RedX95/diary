@@ -12,6 +12,7 @@ def _ensure_schema(conn: sqlite3.Connection):
           user_id TEXT,
           text TEXT NOT NULL,
           address TEXT,
+          phone TEXT,
           lat REAL,
           lon REAL,
           map_url TEXT,
@@ -31,6 +32,8 @@ def _ensure_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE tasks ADD COLUMN user_id TEXT")
     if "address" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN address TEXT")
+    if "phone" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN phone TEXT")
     if "lat" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN lat REAL")
     if "lon" not in cols:
@@ -67,7 +70,7 @@ def load_tasks():
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, user_id, text, address, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at FROM tasks"
+            "SELECT id, user_id, text, address, phone, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at FROM tasks"
         ).fetchall()
         tasks = []
         for r in rows:
@@ -77,6 +80,7 @@ def load_tasks():
                     "userId": r["user_id"],
                     "text": r["text"],
                     "address": r["address"],
+                    "phone": r["phone"],
                     "lat": r["lat"],
                     "lon": r["lon"],
                     "mapUrl": r["map_url"],
@@ -102,12 +106,13 @@ def save_tasks(tasks):
             updated_at = int(t.get("updatedAt") or now_ms)
             conn.execute(
                 """
-                INSERT INTO tasks (id, user_id, text, address, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, user_id, text, address, phone, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   user_id=excluded.user_id,
                   text=excluded.text,
                   address=excluded.address,
+                  phone=excluded.phone,
                   lat=excluded.lat,
                   lon=excluded.lon,
                   map_url=excluded.map_url,
@@ -123,6 +128,7 @@ def save_tasks(tasks):
                     t.get("userId"),
                     t["text"],
                     t.get("address"),
+                    t.get("phone"),
                     t.get("lat"),
                     t.get("lon"),
                     t.get("mapUrl"),

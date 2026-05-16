@@ -30,39 +30,51 @@ def sync_once(access_token: str, user_id: str):
     dirty = [t for t in local if t.get("dirty") and t.get("userId") == user_id]
 
     if dirty:
-        payload: list[dict[str, Any]] = []
+        payload_with_phone: list[dict[str, Any]] = []
+        payload_without_phone: list[dict[str, Any]] = []
         for t in dirty:
-            payload.append(
-                {
-                    "id": t["id"],
-                    "user_id": user_id,
-                    "text": t["text"],
-                    "address": t.get("address"),
-                    "lat": t.get("lat"),
-                    "lon": t.get("lon"),
-                    "map_url": t.get("mapUrl"),
-                    "time": t["time"],
-                    "date": t["date"],
-                    "completed": bool(t.get("completed")),
-                    "deleted": bool(t.get("deleted")),
-                    "created_at": int(t.get("createdAt") or 0),
-                    "updated_at": int(t.get("updatedAt") or 0),
-                }
-            )
+            row = {
+                "id": t["id"],
+                "user_id": user_id,
+                "text": t["text"],
+                "address": t.get("address"),
+                "lat": t.get("lat"),
+                "lon": t.get("lon"),
+                "map_url": t.get("mapUrl"),
+                "time": t["time"],
+                "date": t["date"],
+                "completed": bool(t.get("completed")),
+                "deleted": bool(t.get("deleted")),
+                "created_at": int(t.get("createdAt") or 0),
+                "updated_at": int(t.get("updatedAt") or 0),
+            }
+            payload_without_phone.append(row)
+            payload_with_phone.append({**row, "phone": t.get("phone")})
 
-        client.table(_table()).upsert(payload, on_conflict="id").execute()
+        try:
+            client.table(_table()).upsert(payload_with_phone, on_conflict="id").execute()
+        except Exception:
+            client.table(_table()).upsert(payload_without_phone, on_conflict="id").execute()
 
         set_tasks_dirty([t["id"] for t in dirty], dirty=False)
         for t in local:
             if t.get("dirty") and t.get("userId") == user_id:
                 t["dirty"] = False
 
-    remote = (
-        client.table(_table())
-        .select("id,user_id,text,address,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
-        .eq("user_id", user_id)
-        .execute()
-    )
+    try:
+        remote = (
+            client.table(_table())
+            .select("id,user_id,text,address,phone,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except Exception:
+        remote = (
+            client.table(_table())
+            .select("id,user_id,text,address,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
+            .eq("user_id", user_id)
+            .execute()
+        )
 
     remote_rows = remote.data or []
 
@@ -78,6 +90,7 @@ def sync_once(access_token: str, user_id: str):
             "userId": r.get("user_id"),
             "text": r.get("text") or "",
             "address": r.get("address"),
+            "phone": (r.get("phone") if "phone" in r else None) or (existing or {}).get("phone"),
             "lat": r.get("lat"),
             "lon": r.get("lon"),
             "mapUrl": r.get("map_url"),

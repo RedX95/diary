@@ -1,9 +1,17 @@
 import os
+import sys
 import json
 import asyncio
 from datetime import date, datetime
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
+
+LOCAL_CONTACT_PACKAGE = os.path.join(os.path.dirname(__file__), "packages", "flet_contact_launcher")
+if os.path.isdir(LOCAL_CONTACT_PACKAGE) and LOCAL_CONTACT_PACKAGE not in sys.path:
+    sys.path.insert(0, LOCAL_CONTACT_PACKAGE)
+LOCAL_STT_PACKAGE = os.path.join(os.path.dirname(__file__), "packages", "flet_stt")
+if os.path.isdir(LOCAL_STT_PACKAGE) and LOCAL_STT_PACKAGE not in sys.path:
+    sys.path.insert(0, LOCAL_STT_PACKAGE)
 
 import flet as ft
 try:
@@ -12,6 +20,14 @@ except ImportError:
     FletStt = None
 
     class SttError(Exception):
+        pass
+
+try:
+    from flet_contact_launcher import ContactLauncherError, FletContactLauncher
+except ImportError:
+    FletContactLauncher = None
+
+    class ContactLauncherError(Exception):
         pass
 
 from components.calendar import CalendarComponent
@@ -107,6 +123,7 @@ async def main(page: ft.Page):
 
     task_list = ft.Column(spacing=10)
     stt = FletStt() if FletStt else None
+    contact_launcher = FletContactLauncher() if FletContactLauncher else None
     stt_available = stt is not None
     stt_initialized = False
     selected_stt_locale = ""
@@ -114,6 +131,7 @@ async def main(page: ft.Page):
     voice_base_text = ""
     voice_button: ft.IconButton | None = None
     voice_listening = False
+    pending_contact_requests: dict[str, str] = {}
 
     def show_snackbar(msg: str):
         sb = ft.SnackBar(content=ft.Text(msg))
@@ -123,6 +141,50 @@ async def main(page: ft.Page):
 
     if stt is not None:
         page.services.append(stt)
+    if contact_launcher is not None:
+        page.services.append(contact_launcher)
+
+    def parse_event_payload(data):
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {"status": data}
+        return {}
+
+    def on_contact_launcher_status(e: ft.ControlEvent):
+        payload = parse_event_payload(e.data)
+        status = str(payload.get("status", "")).strip()
+        request_id = str(payload.get("request_id", "")).strip()
+        phone = str(payload.get("phone", "")).strip()
+
+        if request_id:
+            pending_contact_requests.pop(request_id, None)
+
+        if not status or status.startswith("opened_"):
+            return
+        if status == "not_found":
+            show_snackbar("Контакт с таким номером не найден в телефонной книге")
+            return
+        if status.startswith("permission_denied"):
+            show_snackbar("Разрешите доступ к контактам в настройках приложения")
+            return
+        if status.startswith("launch_failed:"):
+            details = status.split(":", 1)[1]
+            show_snackbar(f"Телефонная книга не открыла контакт: {details}")
+            return
+        if status.startswith("error:"):
+            details = status.split(":", 1)[1]
+            show_snackbar(f"Ошибка открытия контакта: {details}")
+            return
+        show_snackbar(f"Не удалось открыть контакт {phone or ''}: {status}".strip())
+
+    if contact_launcher is not None:
+        contact_launcher.on_status = on_contact_launcher_status
 
     def open_map_image(url: str | None):
         nonlocal fullscreen_map_url
@@ -200,6 +262,73 @@ async def main(page: ft.Page):
         except Exception as ex:
             show_snackbar(f"Не удалось открыть ссылку: {ex}")
 
+    def open_contact_by_phone(raw_phone: str | None):
+        raw_phone = (raw_phone or "").strip()
+        if not raw_phone:
+            show_snackbar("Введите номер телефона")
+            return
+
+        normalized = "".join(ch for ch in raw_phone if ch.isdigit() or ch in "+*#")
+        if not normalized:
+            show_snackbar("Некорректный номер телефона")
+            return
+
+        show_snackbar("Открываю контакт...")
+
+        async def try_open_contact():
+            if contact_launcher is None:
+                show_snackbar("Нативный запуск контактов недоступен. Пересоберите APK.")
+                return
+            try:
+                result = await asyncio.wait_for(
+                    contact_launcher.open_contact(normalized),
+                    timeout=8,
+                )
+            except asyncio.TimeoutError:
+                show_snackbar("Не удалось получить ответ от телефонной книги")
+                return
+            except ContactLauncherError as ex:
+                show_snackbar(f"Не удалось открыть контакт: {ex}")
+                return
+
+            if result.startswith("opened") or result == "started":
+                return
+            if result == "not_found":
+                show_snackbar("Контакт с таким номером не найден")
+                return
+            if result == "permission_denied":
+                show_snackbar("Разрешите доступ к контактам в настройках приложения")
+                return
+            show_snackbar(f"Не удалось открыть контакт: {result}")
+
+        page.run_task(try_open_contact)
+
+    def open_contact_by_phone(raw_phone: str | None):
+        raw_phone = (raw_phone or "").strip()
+        if not raw_phone:
+            show_snackbar("Введите номер телефона")
+            return
+
+        normalized = "".join(ch for ch in raw_phone if ch.isdigit() or ch in "+*#")
+        if not normalized:
+            show_snackbar("Некорректный номер телефона")
+            return
+
+        show_snackbar("Открываю контакт...")
+        if contact_launcher is None:
+            show_snackbar("Нативный запуск контактов недоступен. Пересоберите APK.")
+            return
+        try:
+            request_id = contact_launcher.open_contact(normalized)
+            pending_contact_requests[request_id] = normalized
+        except ContactLauncherError as ex:
+            show_snackbar(f"Не удалось открыть контакт: {ex}")
+        except Exception as ex:
+            show_snackbar(f"Не удалось запустить контакт: {ex}")
+
+    def open_contact_profile_by_phone(e=None):
+        open_contact_by_phone(phone_input.value)
+
     def refresh_task_list():
         filtered = [t for t in tasks if (not t.get("deleted")) and t.get("date") == selected_date]
         filtered.sort(key=lambda t: t.get("time") or "")
@@ -229,6 +358,7 @@ async def main(page: ft.Page):
         map_url = task.get("mapUrl")
         lat = task.get("lat")
         lon = task.get("lon")
+        task_phone = (task.get("phone") or "").strip()
 
         map_controls: list[ft.Control] = []
         if lat is not None and lon is not None:
@@ -343,6 +473,11 @@ async def main(page: ft.Page):
                         visible=bool(map_url),
                         on_click=lambda e, u=map_url: open_url(u),
                     ),
+                    ft.TextButton(
+                        f"Контакт: {task_phone}",
+                        visible=bool(task_phone),
+                        on_click=lambda e, p=task_phone: open_contact_by_phone(p),
+                    ),
                     *map_controls,
                 ],
                 spacing=10,
@@ -377,6 +512,7 @@ async def main(page: ft.Page):
         now_ms = int(datetime.now().timestamp() * 1000)
 
         address_value = (address_input.value or "").strip()
+        phone_value = (phone_input.value or "").strip()
         lat = None
         lon = None
         map_url = None
@@ -414,6 +550,7 @@ async def main(page: ft.Page):
             "userId": user_id,
             "text": text,
             "address": address_value or None,
+            "phone": phone_value or None,
             "lat": lat,
             "lon": lon,
             "mapUrl": map_url,
@@ -431,6 +568,7 @@ async def main(page: ft.Page):
 
         task_input.value = ""
         address_input.value = ""
+        phone_input.value = ""
         selected_time = ""
         time_display.content = ft.Text("18:30", color=ft.Colors.GREY_400, size=16)
 
@@ -666,6 +804,22 @@ async def main(page: ft.Page):
         bgcolor=ft.Colors.WHITE,
     )
 
+    phone_input = ft.TextField(
+        hint_text="Телефон контакта",
+        expand=True,
+        border_radius=12,
+        filled=True,
+        bgcolor=ft.Colors.WHITE,
+        keyboard_type=ft.KeyboardType.PHONE,
+    )
+
+    open_contact_button = ft.IconButton(
+        icon=ft.Icons.CONTACT_PHONE,
+        icon_color=ft.Colors.BLUE,
+        tooltip="Открыть контакт в телефонной книге",
+        on_click=open_contact_profile_by_phone,
+    )
+
     def on_task_mic_click(e):
         page.run_task(toggle_voice_input, task_input, task_mic_button)
 
@@ -810,6 +964,11 @@ async def main(page: ft.Page):
                     ),
                     ft.Row(
                         controls=[address_input, address_mic_button],
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row(
+                        controls=[phone_input, open_contact_button],
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),

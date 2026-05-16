@@ -1,0 +1,24 @@
+[project]
+name = "flet-stt"
+version = "0.1.5"
+description = "Speech-to-text for Flet"
+requires-python = ">=3.11"
+dependencies = ["flet>=0.82.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"*" = ["*"]
+
+[tool.setuptools.data-files]
+"flutter/flet_stt" = ["flutter/flet_stt/pubspec.yaml"]
+"flutter/flet_stt/lib" = ["flutter/flet_stt/lib/flet_stt.dart"]
+"flutter/flet_stt/lib/src" = [
+    "flutter/flet_stt/lib/src/extension.dart",
+    "flutter/flet_stt/lib/src/stt_service.dart",
+]
