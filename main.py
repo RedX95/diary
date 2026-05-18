@@ -86,6 +86,14 @@ def _static_osm_map_url(lat: float, lon: float, width: int = 320, height: int = 
     return f"https://static-maps.yandex.ru/1.x/?ll={city_ll}&size={size}&z={city_zoom}&l=map&pt={lon_s},{lat_s},pm2rdm"
     
 
+TASK_SECTIONS = [
+    ("morning", "Утро"),
+    ("day", "День"),
+    ("evening", "Вечер"),
+]
+TASK_SECTION_LABELS = dict(TASK_SECTIONS)
+
+
 async def main(page: ft.Page):
     page.title = "Мои задачи"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -103,6 +111,8 @@ async def main(page: ft.Page):
 
     selected_date = date.today().strftime("%Y-%m-%d")
     selected_time = ""
+    selected_section = "day"
+    dragging_task_id = ""
 
     storage_paths = ft.StoragePaths()
     try:
@@ -331,7 +341,11 @@ async def main(page: ft.Page):
 
     def refresh_task_list():
         filtered = [t for t in tasks if (not t.get("deleted")) and t.get("date") == selected_date]
-        filtered.sort(key=lambda t: t.get("time") or "")
+        for index, task in enumerate(filtered):
+            task.setdefault("section", "day")
+            if task.get("sortOrder") is None:
+                task["sortOrder"] = task.get("createdAt") or index
+        filtered.sort(key=lambda t: ((t.get("section") or "day"), int(t.get("sortOrder") or 0), t.get("time") or ""))
 
         if not filtered:
             task_list.controls = [
@@ -349,16 +363,369 @@ async def main(page: ft.Page):
                 )
             ]
         else:
-            task_list.controls = [build_task_item(task) for task in filtered]
+            task_list.controls = [build_task_section(section_key, label, filtered) for section_key, label in TASK_SECTIONS]
 
         page.update()
 
-    def build_task_item(task):
+    def task_items_for(date_str: str, section_key: str, items: list[dict] | None = None, exclude_id: str | None = None):
+        source = items if items is not None else tasks
+        section_tasks = [
+            t
+            for t in source
+            if (not t.get("deleted"))
+            and t.get("date") == date_str
+            and (t.get("section") or "day") == section_key
+            and t.get("id") != exclude_id
+        ]
+        section_tasks.sort(key=lambda t: (int(t.get("sortOrder") or 0), t.get("time") or "", t.get("createdAt") or 0))
+        return section_tasks
+
+    def section_items(section_key: str, items: list[dict] | None = None):
+        return task_items_for(selected_date, section_key, items)
+
+    def find_task(task_id: str):
+        for task in tasks:
+            if task.get("id") == task_id:
+                return task
+        return None
+
+    def persist_section_order(section_key: str, ordered_tasks: list[dict]):
+        now_ms = int(datetime.now().timestamp() * 1000)
+        for index, task in enumerate(ordered_tasks):
+            task["section"] = section_key
+            task["sortOrder"] = index
+            task["updatedAt"] = now_ms
+            task["dirty"] = True
+        save_tasks(tasks)
+
+    def persist_order_for_date_section(date_str: str, section_key: str):
+        now_ms = int(datetime.now().timestamp() * 1000)
+        for index, task in enumerate(task_items_for(date_str, section_key)):
+            task["sortOrder"] = index
+            task["updatedAt"] = now_ms
+            task["dirty"] = True
+
+    def move_task_to_section(task_id: str, target_section: str, target_task_id: str | None = None):
+        task = find_task(task_id)
+        if not task:
+            return
+
+        old_section = task.get("section") or "day"
+        task_date = task.get("date") or selected_date
+        target_items = task_items_for(task_date, target_section, exclude_id=task_id)
+        insert_at = len(target_items)
+        if target_task_id:
+            for index, item in enumerate(target_items):
+                if item.get("id") == target_task_id:
+                    insert_at = index
+                    break
+
+        target_items.insert(insert_at, task)
+        now_ms = int(datetime.now().timestamp() * 1000)
+        task["section"] = target_section
+        task["updatedAt"] = now_ms
+        task["dirty"] = True
+
+        if old_section != target_section:
+            persist_order_for_date_section(task_date, old_section)
+
+        for index, item in enumerate(target_items):
+            item["section"] = target_section
+            item["sortOrder"] = index
+            item["updatedAt"] = now_ms
+            item["dirty"] = True
+
+        save_tasks(tasks)
+        refresh_task_list()
+
+    def move_task_to_date(task_id: str, target_date: str):
+        task = find_task(task_id)
+        if not task:
+            return
+
+        old_date = task.get("date") or selected_date
+        section_key = task.get("section") or "day"
+        now_ms = int(datetime.now().timestamp() * 1000)
+
+        task["date"] = target_date
+        task["sortOrder"] = len(task_items_for(target_date, section_key, exclude_id=task_id))
+        task["updatedAt"] = now_ms
+        task["dirty"] = True
+
+        if old_date != target_date:
+            persist_order_for_date_section(old_date, section_key)
+
+        save_tasks(tasks)
+        refresh_task_list()
+        show_snackbar("Заметка перенесена")
+
+    def show_confirm_section_move(task_id: str, target_section: str, target_task_id: str | None = None):
+        task = find_task(task_id)
+        if not task:
+            return
+
+        source_label = TASK_SECTION_LABELS.get(task.get("section") or "day", "День")
+        target_label = TASK_SECTION_LABELS.get(target_section, "День")
+
+        def close_dialog(e=None):
+            confirm_dialog.open = False
+            page.update()
+
+        def confirm(e=None):
+            confirm_dialog.open = False
+            move_task_to_section(task_id, target_section, target_task_id)
+
+        confirm_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Перенести заметку?"),
+            content=ft.Text(f"Перенести из раздела «{source_label}» в «{target_label}»?"),
+            actions=[
+                ft.TextButton("Отмена", on_click=close_dialog),
+                ft.TextButton("Перенести", on_click=confirm),
+            ],
+        )
+        try:
+            page.show_dialog(confirm_dialog)
+        except Exception:
+            page.dialog = confirm_dialog
+            confirm_dialog.open = True
+            page.update()
+
+    def move_task_to_section_from_menu(task_id: str, target_section: str):
+        task = find_task(task_id)
+        if not task:
+            return
+        current_section = task.get("section") or "day"
+        if current_section == target_section:
+            show_snackbar("Заметка уже в этом разделе")
+            return
+        show_confirm_section_move(task_id, target_section)
+
+    def open_move_date_dialog(task_id: str):
+        task = find_task(task_id)
+        if not task:
+            return
+
+        def on_destination_date(date_str: str):
+            move_date_dialog.open = False
+            move_task_to_date(task_id, date_str)
+            page.update()
+
+        move_calendar = CalendarComponent(on_date_select=on_destination_date)
+        task_date = task.get("date") or selected_date
+        try:
+            parsed_date = datetime.strptime(task_date, "%Y-%m-%d").date()
+            move_calendar.current_year = parsed_date.year
+            move_calendar.current_month = parsed_date.month
+            move_calendar.selected_date = task_date
+            move_calendar._build_ui()
+        except Exception:
+            pass
+
+        def close_dialog(e=None):
+            move_date_dialog.open = False
+            page.update()
+
+        move_date_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Выберите день"),
+            content=ft.Container(content=move_calendar, width=350),
+            actions=[ft.TextButton("Отмена", on_click=close_dialog)],
+        )
+        try:
+            page.show_dialog(move_date_dialog)
+        except Exception:
+            page.dialog = move_date_dialog
+            move_date_dialog.open = True
+            page.update()
+
+    def build_drop_target(section_key: str, target_task_id: str | None = None, content: ft.Control | None = None):
+        def on_accept(e, target_section=section_key, target_id=target_task_id):
+            nonlocal dragging_task_id
+            dragged = getattr(e, "src", None)
+            if dragged is None and getattr(e, "src_id", None) is not None:
+                dragged = page.get_control(e.src_id)
+            task_id = dragging_task_id or getattr(dragged, "data", None)
+            dragging_task_id = ""
+            if not task_id or task_id == target_id:
+                return
+
+            task = find_task(task_id)
+            if not task:
+                return
+
+            current_section = task.get("section") or "day"
+            if current_section != target_section:
+                show_confirm_section_move(task_id, target_section, target_id)
+            else:
+                move_task_to_section(task_id, target_section, target_id)
+
+        return ft.DragTarget(
+            group="tasks",
+            content=content or ft.Container(
+                height=22,
+                border_radius=8,
+                bgcolor=ft.Colors.with_opacity(0.01, ft.Colors.BLUE),
+            ),
+            on_accept=on_accept,
+        )
+
+    def build_drag_handle(task: dict):
+        def on_drag_start(e=None):
+            nonlocal dragging_task_id
+            dragging_task_id = task.get("id") or ""
+
+        def on_drag_complete(e=None):
+            nonlocal dragging_task_id
+            dragging_task_id = ""
+
+        task_text = task.get("text") or "Заметка"
+        preview_text = (task_text[:42] + "...") if len(task_text) > 45 else task_text
+        handle = ft.Container(
+            content=ft.Icon(ft.Icons.DRAG_INDICATOR, color=ft.Colors.GREY_500),
+            padding=ft.Padding(8, 8, 8, 8),
+            tooltip="Перетащить",
+        )
+        return ft.Draggable(
+            group="tasks",
+            data=task.get("id"),
+            content=handle,
+            on_drag_start=on_drag_start,
+            on_drag_complete=on_drag_complete,
+            content_feedback=ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.DRAG_INDICATOR, color=ft.Colors.BLUE),
+                        ft.Text(preview_text, size=15, weight=ft.FontWeight.W_600),
+                    ],
+                    spacing=8,
+                ),
+                width=320,
+                bgcolor=ft.Colors.WHITE,
+                border_radius=14,
+                padding=ft.Padding(12, 10, 12, 10),
+                shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.22, ft.Colors.BLACK)),
+            ),
+        )
+
+    def estimate_task_height(task: dict) -> int:
+        height = 122
+        text_len = len(task.get("text") or "")
+        if text_len > 34:
+            height += min(6, (text_len - 1) // 34) * 24
+        if task.get("address"):
+            height += 50
+        if task.get("phone"):
+            height += 50
+        if task.get("lat") is not None and task.get("lon") is not None:
+            height += 285
+        return height
+
+    def build_draggable_task(task: dict):
+        task_text = task.get("text") or "Заметка"
+        preview_text = (task_text[:42] + "...") if len(task_text) > 45 else task_text
+        return ft.Draggable(
+            group="tasks",
+            data=task.get("id"),
+            content=build_task_item(task, drag_handle=build_drag_handle(task)),
+            content_when_dragging=ft.Container(
+                content=build_task_item(task, drag_handle=build_drag_handle(task)),
+                opacity=0.35,
+            ),
+            content_feedback=ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.DRAG_INDICATOR, color=ft.Colors.BLUE),
+                        ft.Text(preview_text, size=15, weight=ft.FontWeight.W_600),
+                    ],
+                    spacing=8,
+                ),
+                width=280,
+                bgcolor=ft.Colors.WHITE,
+                border_radius=14,
+                padding=ft.Padding(12, 10, 12, 10),
+                shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.22, ft.Colors.BLACK)),
+            ),
+        )
+
+    def build_task_section(section_key: str, label: str, filtered: list[dict]):
+        items = section_items(section_key, filtered)
+
+        if not items:
+            content = build_drop_target(
+                section_key,
+                content=ft.Container(
+                    content=ft.Text("Нет заметок", color=ft.Colors.GREY_400, size=14),
+                    padding=ft.Padding(12, 8, 12, 8),
+                    border_radius=8,
+                ),
+            )
+        else:
+            controls = [
+                build_drop_target(
+                    section_key,
+                    target_task_id=task.get("id"),
+                    content=build_task_item(
+                        task,
+                        drag_handle=build_drag_handle(task),
+                    )
+                )
+                for task in items
+            ]
+            controls.append(build_drop_target(section_key))
+            content = ft.Column(controls=controls, spacing=0)
+
+        return ft.Column(
+            controls=[
+                ft.Text(label, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_700),
+                content,
+            ],
+            spacing=8,
+        )
+
+    def build_task_item(task, drag_handle=None):
         is_completed = bool(task.get("completed"))
         map_url = task.get("mapUrl")
         lat = task.get("lat")
         lon = task.get("lon")
         task_phone = (task.get("phone") or "").strip()
+
+        task_menu = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Действия",
+            items=[
+                ft.PopupMenuItem(
+                    content=ft.Text("Перенести на день"),
+                    icon=ft.Icons.EVENT,
+                    data="move_day",
+                    on_click=lambda e, tid=task["id"]: open_move_date_dialog(tid),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("В раздел: Утро"),
+                    icon=ft.Icons.WB_SUNNY_OUTLINED,
+                    data="section:morning",
+                    on_click=lambda e, tid=task["id"]: move_task_to_section_from_menu(tid, "morning"),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("В раздел: День"),
+                    icon=ft.Icons.WB_SUNNY,
+                    data="section:day",
+                    on_click=lambda e, tid=task["id"]: move_task_to_section_from_menu(tid, "day"),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("В раздел: Вечер"),
+                    icon=ft.Icons.NIGHTS_STAY_OUTLINED,
+                    data="section:evening",
+                    on_click=lambda e, tid=task["id"]: move_task_to_section_from_menu(tid, "evening"),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("Удалить"),
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    data="delete",
+                    on_click=lambda e, tid=task["id"]: delete_task(tid),
+                ),
+            ],
+        )
 
         map_controls: list[ft.Control] = []
         if lat is not None and lon is not None:
@@ -414,6 +781,7 @@ async def main(page: ft.Page):
                 )
 
         return ft.Container(
+            key=task.get("id"),
             content=ft.Column(
                 controls=[
                     ft.Row(
@@ -430,6 +798,7 @@ async def main(page: ft.Page):
                                         bgcolor=ft.Colors.GREY_100,
                                         padding=ft.Padding(12, 6, 12, 6),
                                         border_radius=8,
+                                        visible=bool(task.get("time")),
                                     ),
                                     ft.Container(
                                         content=ft.Text(
@@ -452,11 +821,8 @@ async def main(page: ft.Page):
                                         icon_color=ft.Colors.GREEN if is_completed else ft.Colors.GREY_400,
                                         on_click=lambda e, tid=task["id"]: toggle_task(tid),
                                     ),
-                                    ft.IconButton(
-                                        icon=ft.Icons.DELETE_OUTLINE,
-                                        icon_color=ft.Colors.RED_400,
-                                        on_click=lambda e, tid=task["id"]: delete_task(tid),
-                                    ),
+                                    task_menu,
+                                    drag_handle or ft.Container(width=40),
                                 ],
                                 spacing=0,
                             ),
@@ -485,6 +851,7 @@ async def main(page: ft.Page):
             bgcolor=ft.Colors.WHITE,
             border_radius=16,
             padding=16,
+            margin=ft.Margin(0, 0, 0, 10),
             shadow=ft.BoxShadow(blur_radius=8, color=ft.Colors.with_opacity(0.05, ft.Colors.BLACK)),
             opacity=0.85 if is_completed else 1.0,
         )
@@ -502,14 +869,24 @@ async def main(page: ft.Page):
             return
 
         parsed = parse_datetime_from_text(text)
-        final_time = selected_time or parsed.get("time")
+        final_time = selected_time or parsed.get("time") or ""
         final_date = parsed.get("date") if parsed.get("has_date") else selected_date
 
-        if not final_time:
+        if False and not final_time:
             show_snackbar("Укажите время в тексте или выберите вручную")
             return
 
         now_ms = int(datetime.now().timestamp() * 1000)
+        task_section = section_dropdown.value or selected_section or "day"
+        next_order = len(
+            [
+                t
+                for t in tasks
+                if (not t.get("deleted"))
+                and t.get("date") == final_date
+                and (t.get("section") or "day") == task_section
+            ]
+        )
 
         address_value = (address_input.value or "").strip()
         phone_value = (phone_input.value or "").strip()
@@ -551,6 +928,8 @@ async def main(page: ft.Page):
             "text": text,
             "address": address_value or None,
             "phone": phone_value or None,
+            "section": task_section,
+            "sortOrder": next_order,
             "lat": lat,
             "lon": lon,
             "mapUrl": map_url,
@@ -570,7 +949,7 @@ async def main(page: ft.Page):
         address_input.value = ""
         phone_input.value = ""
         selected_time = ""
-        time_display.content = ft.Text("18:30", color=ft.Colors.GREY_400, size=16)
+        time_display.content = ft.Text("Время", color=ft.Colors.GREY_400, size=16)
 
         refresh_task_list()
 
@@ -847,8 +1226,25 @@ async def main(page: ft.Page):
         stt.on_error = on_stt_error
         stt.on_status = on_stt_status
 
+    def on_section_change(e):
+        nonlocal selected_section
+        selected_section = section_dropdown.value or "day"
+
+    section_dropdown = ft.Dropdown(
+        value=selected_section,
+        options=[
+            ft.DropdownOption(key=key, text=label)
+            for key, label in TASK_SECTIONS
+        ],
+        on_select=on_section_change,
+        width=130,
+        border_radius=12,
+        filled=True,
+        bgcolor=ft.Colors.WHITE,
+    )
+
     time_display = ft.Container(
-        content=ft.Text("18:30", color=ft.Colors.GREY_400, size=16),
+        content=ft.Text("Время", color=ft.Colors.GREY_400, size=16),
         padding=ft.Padding(16, 14, 16, 14),
         border_radius=12,
         bgcolor=ft.Colors.WHITE,
@@ -974,6 +1370,7 @@ async def main(page: ft.Page):
                     ),
                     ft.Row(
                         controls=[
+                            section_dropdown,
                             time_display,
                             date_display,
                             ft.Container(

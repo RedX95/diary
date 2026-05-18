@@ -13,10 +13,12 @@ def _ensure_schema(conn: sqlite3.Connection):
           text TEXT NOT NULL,
           address TEXT,
           phone TEXT,
+          section TEXT,
+          sort_order INTEGER,
           lat REAL,
           lon REAL,
           map_url TEXT,
-          time TEXT NOT NULL,
+          time TEXT NOT NULL DEFAULT '',
           date TEXT NOT NULL,
           completed INTEGER NOT NULL DEFAULT 0,
           deleted INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +36,10 @@ def _ensure_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE tasks ADD COLUMN address TEXT")
     if "phone" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN phone TEXT")
+    if "section" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN section TEXT")
+    if "sort_order" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER")
     if "lat" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN lat REAL")
     if "lon" not in cols:
@@ -70,7 +76,7 @@ def load_tasks():
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, user_id, text, address, phone, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at FROM tasks"
+            "SELECT id, user_id, text, address, phone, section, sort_order, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at FROM tasks"
         ).fetchall()
         tasks = []
         for r in rows:
@@ -81,6 +87,8 @@ def load_tasks():
                     "text": r["text"],
                     "address": r["address"],
                     "phone": r["phone"],
+                    "section": r["section"] or "day",
+                    "sortOrder": r["sort_order"] if r["sort_order"] is not None else r["created_at"],
                     "lat": r["lat"],
                     "lon": r["lon"],
                     "mapUrl": r["map_url"],
@@ -106,13 +114,15 @@ def save_tasks(tasks):
             updated_at = int(t.get("updatedAt") or now_ms)
             conn.execute(
                 """
-                INSERT INTO tasks (id, user_id, text, address, phone, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, user_id, text, address, phone, section, sort_order, lat, lon, map_url, time, date, completed, deleted, dirty, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   user_id=excluded.user_id,
                   text=excluded.text,
                   address=excluded.address,
                   phone=excluded.phone,
+                  section=excluded.section,
+                  sort_order=excluded.sort_order,
                   lat=excluded.lat,
                   lon=excluded.lon,
                   map_url=excluded.map_url,
@@ -129,10 +139,12 @@ def save_tasks(tasks):
                     t["text"],
                     t.get("address"),
                     t.get("phone"),
+                    t.get("section") or "day",
+                    int(t.get("sortOrder") if t.get("sortOrder") is not None else created_at),
                     t.get("lat"),
                     t.get("lon"),
                     t.get("mapUrl"),
-                    t["time"],
+                    t.get("time") or "",
                     t["date"],
                     1 if t.get("completed") else 0,
                     1 if t.get("deleted") else 0,

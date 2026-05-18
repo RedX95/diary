@@ -30,7 +30,8 @@ def sync_once(access_token: str, user_id: str):
     dirty = [t for t in local if t.get("dirty") and t.get("userId") == user_id]
 
     if dirty:
-        payload_with_phone: list[dict[str, Any]] = []
+        payload_full: list[dict[str, Any]] = []
+        payload_without_section: list[dict[str, Any]] = []
         payload_without_phone: list[dict[str, Any]] = []
         for t in dirty:
             row = {
@@ -38,23 +39,34 @@ def sync_once(access_token: str, user_id: str):
                 "user_id": user_id,
                 "text": t["text"],
                 "address": t.get("address"),
+                "phone": t.get("phone"),
+                "section": t.get("section") or "day",
+                "sort_order": int(t.get("sortOrder") or t.get("createdAt") or 0),
                 "lat": t.get("lat"),
                 "lon": t.get("lon"),
                 "map_url": t.get("mapUrl"),
-                "time": t["time"],
+                "time": t.get("time") or "",
                 "date": t["date"],
                 "completed": bool(t.get("completed")),
                 "deleted": bool(t.get("deleted")),
                 "created_at": int(t.get("createdAt") or 0),
                 "updated_at": int(t.get("updatedAt") or 0),
             }
-            payload_without_phone.append(row)
-            payload_with_phone.append({**row, "phone": t.get("phone")})
+            payload_full.append(row)
+            payload_without_section.append(
+                {k: v for k, v in row.items() if k not in ("section", "sort_order")}
+            )
+            payload_without_phone.append(
+                {k: v for k, v in row.items() if k not in ("phone", "section", "sort_order")}
+            )
 
         try:
-            client.table(_table()).upsert(payload_with_phone, on_conflict="id").execute()
+            client.table(_table()).upsert(payload_full, on_conflict="id").execute()
         except Exception:
-            client.table(_table()).upsert(payload_without_phone, on_conflict="id").execute()
+            try:
+                client.table(_table()).upsert(payload_without_section, on_conflict="id").execute()
+            except Exception:
+                client.table(_table()).upsert(payload_without_phone, on_conflict="id").execute()
 
         set_tasks_dirty([t["id"] for t in dirty], dirty=False)
         for t in local:
@@ -64,17 +76,25 @@ def sync_once(access_token: str, user_id: str):
     try:
         remote = (
             client.table(_table())
-            .select("id,user_id,text,address,phone,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
+            .select("id,user_id,text,address,phone,section,sort_order,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
             .eq("user_id", user_id)
             .execute()
         )
     except Exception:
-        remote = (
-            client.table(_table())
-            .select("id,user_id,text,address,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
-            .eq("user_id", user_id)
-            .execute()
-        )
+        try:
+            remote = (
+                client.table(_table())
+                .select("id,user_id,text,address,phone,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
+                .eq("user_id", user_id)
+                .execute()
+            )
+        except Exception:
+            remote = (
+                client.table(_table())
+                .select("id,user_id,text,address,lat,lon,map_url,time,date,completed,deleted,created_at,updated_at")
+                .eq("user_id", user_id)
+                .execute()
+            )
 
     remote_rows = remote.data or []
 
@@ -91,6 +111,8 @@ def sync_once(access_token: str, user_id: str):
             "text": r.get("text") or "",
             "address": r.get("address"),
             "phone": (r.get("phone") if "phone" in r else None) or (existing or {}).get("phone"),
+            "section": (r.get("section") if "section" in r else None) or (existing or {}).get("section") or "day",
+            "sortOrder": int((r.get("sort_order") if "sort_order" in r else None) or (existing or {}).get("sortOrder") or r.get("created_at") or 0),
             "lat": r.get("lat"),
             "lon": r.get("lon"),
             "mapUrl": r.get("map_url"),

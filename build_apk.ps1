@@ -1,4 +1,5 @@
 $env:PYTHONIOENCODING = "utf-8"
+$env:FLET_CLI_NO_RICH_OUTPUT = "1"
 $env:PUB_HOSTED_URL = "https://pub.flutter-io.cn"
 $env:FLUTTER_STORAGE_BASE_URL = "https://storage.flutter-io.cn"
 
@@ -53,6 +54,63 @@ if (Test-Path $androidGradleProperties) {
         $gradleProps = $gradleProps.TrimEnd() + "`r`nandroid.builtInKotlin=false"
     }
     Set-Content -Path $androidGradleProperties -Value $gradleProps
+}
+
+# Flet 0.85 can reuse a stale packaged Python app. Keep the existing dependency
+# bundle, but force-refresh project source files inside app/app.zip before build.
+$fletAppCache = Join-Path $PSScriptRoot "build\flutter\app"
+$fletAppZip = Join-Path $fletAppCache "app.zip"
+$fletAppZipHash = "$fletAppZip.hash"
+$fallbackAppZip = Join-Path $PSScriptRoot "build\flutter\build\app\intermediates\assets\release\mergeReleaseAssets\flutter_assets\app\app.zip"
+
+if (!(Test-Path $fletAppZip) -and (Test-Path $fallbackAppZip)) {
+    New-Item -ItemType Directory -Path $fletAppCache -Force | Out-Null
+    Copy-Item -LiteralPath $fallbackAppZip -Destination $fletAppZip -Force
+}
+
+if (Test-Path $fletAppZip) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    $sourceFiles = @()
+    $sourceFiles += Get-Item -LiteralPath (Join-Path $PSScriptRoot "main.py") -ErrorAction SilentlyContinue
+    $sourceFiles += Get-ChildItem -Path (Join-Path $PSScriptRoot "utils") -Filter "*.py" -File -ErrorAction SilentlyContinue
+    $sourceFiles += Get-ChildItem -Path (Join-Path $PSScriptRoot "components") -Filter "*.py" -File -ErrorAction SilentlyContinue
+
+    $zip = [System.IO.Compression.ZipFile]::Open($fletAppZip, [System.IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $staleEntries = @(
+            "__pycache__/",
+            "utils/__pycache__/",
+            "components/__pycache__/"
+        )
+        $entriesToDelete = @($zip.Entries | Where-Object {
+            $entryName = $_.FullName
+            $staleEntries | Where-Object { $entryName.StartsWith($_) }
+        })
+        foreach ($entry in $entriesToDelete) {
+            $entry.Delete()
+        }
+
+        foreach ($file in $sourceFiles) {
+            if ($null -eq $file) {
+                continue
+            }
+            $rootPath = $PSScriptRoot.TrimEnd("\") + "\"
+            $relative = $file.FullName.Substring($rootPath.Length).Replace("\", "/")
+            $existing = @($zip.Entries | Where-Object { $_.FullName -eq $relative })
+            foreach ($entry in $existing) {
+                $entry.Delete()
+            }
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $relative) | Out-Null
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $fletAppZip).Hash.ToLowerInvariant()
+    Set-Content -Path $fletAppZipHash -Value $hash -NoNewline
 }
 
 flet build apk
